@@ -8,7 +8,6 @@ var bucket = process.env.S3_BUCKET;
 var express = require('express');
 var router = express.Router();
 var debug = require('debug')('clickberry:shiva:web');
-var busboy = require('busboy');
 var uuid = require('node-uuid');
 var path = require('path');
 var multiparty = require('multiparty');
