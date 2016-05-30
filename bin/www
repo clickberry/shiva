@@ -6,7 +6,7 @@
 
 var web = require('../web');
 var worker = require('../worker');
-var debug = require('debug')('clickberry:shiva');
+var debug = require('debug')('clickberry:shiva:server');
 var http = require('http');
 
 /**
