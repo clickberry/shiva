@@ -13,6 +13,7 @@ var path = require('path');
 var Bus = require('./lib/bus');
 var bus = new Bus();
 var Shiva = require('./lib/shiva');
+var shivaUtils = require('./lib/utils');
 
 
 function handleError(err) {
@@ -29,8 +30,37 @@ function publishSegmentEncodedEvent(video, segmentOutputs, fn) {
   segmentOutput.outputs = segmentOutputs;
 
   delete video.segment;
-  video.segmentOutputs = [segmentOutput];
+  video.segmentOutputs = segmentOutput;
   bus.publishSegmentProcessed(video, fn);
+}
+
+function publishAllSegmentsProcessedEvents(video, segments, fn) {
+  delete video.segmentOutputs;
+
+  var segmentsMap = {};
+  segments.forEach(function (key) {
+    var format = path.extname(key).substring(1);
+    var size = /_\d+_(\d+)\./.exec(key)[1];
+    var uri = shivaUtils.getS3Uri(bucket, key);
+    if (!segmentsMap[format]) {
+      segmentsMap[format] = {};
+    }
+    if (!segmentsMap[format][size]) {
+      segmentsMap[format][size] = [];
+    }
+    segmentsMap[format][size].push(uri);
+  });
+
+  video.outputs.forEach(function (output) {
+    var segments = segmentsMap[output.format][output.size];
+    video.segments = {
+      format: output.format,
+      size: output.size,
+      uri: output.uri,
+      chunks: segments
+    };
+    bus.publishAllSegmentsProcessed(video, fn);
+  });
 }
 
 function splitVideo(msg) {
@@ -54,6 +84,7 @@ function splitVideo(msg) {
         handleError(err);
       } else {
         // re-queue the message again if not fatal
+        msg.requeue();
         debug('Video segmenting failed for ' + video.uri +  ', skipping the file: ' + err);
       }
       return;
@@ -98,6 +129,7 @@ function encodeSegment(msg) {
         handleError(err);
       } else {
         // re-queue the message again if not fatal
+        msg.requeue();
         debug('Video encoding failed for ' + segmentUri +  ', skipping the file: ' + err);
       }
       return;
@@ -108,11 +140,49 @@ function encodeSegment(msg) {
   });
 }
 
-function mergeSegment(msg) {
+function mergeSegments(msg) {
+  var video = JSON.parse(msg.body);
+  debug('Video ' + video.id + ' processed segment: ' + JSON.stringify(video));
+
+  if (video.segmentOutputs.index !== (video.segmentOutputs.count - 1)) {
+    // processing only last segment to avoid duplicated events
+    return msg.finish();
+  }
+
+  // merge segment messages or concat segments into video if all processed
+  var shiva = new Shiva();
+  shiva.checkIfAllSegmentsProcessed(video.segmentOutputs.uri, video.outputs.length, video.segmentOutputs.count, bucket, function (err, segments) {
+    if (err) {
+      // re-queue the message again if not fatal
+      msg.requeue();
+      return debug('Video segment merging failed for ' + video.segmentOutputs.uri +  ' segment, skipping the file: ' + err);
+    }
+
+    if (!segments) {
+      msg.requeue(); 
+    }
+
+    debug('All video segments have been encoded for video ' + video.uri);
+    publishAllSegmentsProcessedEvents(video, segments, handleError);
+    msg.finish();
+  });
+}
+
+function concatVideo(msg) {
   var video = JSON.parse(msg.body);
   debug('Video ' + video.id + ' processed segments: ' + JSON.stringify(video));
 
-  // merge segment messages or concat segments into video if all processed
+  var shiva = new Shiva();
+  shiva.concatSegmentsToS3(video.segments.chunks, video.segments.uri, video.segments.format, bucket, function (err, uri) {
+    if (err) {
+      // re-queue the message again if not fatal
+      msg.requeue();
+      return debug('Video segment concatination failed for ' + video.segments.uri +  ' target file: ' + err);
+    }
+
+    debug('All video segments concatenated for ' + video.segments.format + ' ' + video.segments.size + 'p format and uploaded to ' + video.segments.uri);
+    msg.finish();
+  });
 }
 
 module.exports = function () {
@@ -129,9 +199,14 @@ module.exports = function () {
 
     // Processed Segments
     .on('processed-segments', function (msg) {
-      mergeSegment(msg);
+      mergeSegments(msg);
     })
-    
+
+    // Processed Video Segments
+    .on('processed-video-segments', function (msg) {
+      concatVideo(msg);
+    })
+
     .listen();
 
   debug('Listening for messages...');
