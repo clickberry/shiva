@@ -21,6 +21,5 @@ if [ -z "$S3_BUCKET" ]; then
 fi
 
 
-
 # execute nodejs application
 exec npm start
