@@ -159,7 +159,7 @@ function mergeSegments(msg) {
     }
 
     if (!segments) {
-      msg.requeue(); 
+      return msg.requeue(); 
     }
 
     debug('All video segments have been encoded for video ' + video.uri);
