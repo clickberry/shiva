@@ -159,6 +159,7 @@ function mergeSegments(msg) {
     }
 
     if (!segments) {
+      debug('Not all segmenst have been processed for video ' + video.uri + '. Waiting...');
       return msg.requeue(); 
     }
 
